@@ -3,10 +3,36 @@ import pandas as pd
 import re
 
 
-def calc_pagerank(n, out_matrix, in_matrix):
-    pagerank_list = [0 for _ in range(n)]
+def calc_pagerank(n:int, out_matrix:list[dict[int,int]], in_matrix:list[dict[int,int]]):
+    print("Starting PageRank algorithm...")
+    PR_list = [0.15 for _ in range(n)]
+    prevPRSum = 0.0
+    currPRSum = sum(PR_list)
 
-    return pagerank_list
+    # Precompute C: List of total outgoing links for each page
+    C = [0 for _ in range(n)]
+    for i in range(len(out_matrix)):
+        C[i] = sum(out_matrix[i].values())
+
+    while( abs(prevPRSum - currPRSum) / currPRSum > 0.005 ):
+        new_PRs = [0.0 for _ in range(n)]
+
+        for target in range(len(PR_list)):
+            # Use PageRank algorithm to calculate new PR value
+            PR = 0.15
+
+            for source in in_matrix[target].keys():
+                PR += 0.85 * (PR_list[source] / C[source])
+            
+            new_PRs[target] = PR
+
+        prevPRSum = currPRSum
+        currPRSum = sum(new_PRs)
+        PR_list = new_PRs
+
+    print("Done")
+    print(PR_list)
+    return PR_list
 
 def parse_blobs_into_adj_matrix(blobs):
     """
