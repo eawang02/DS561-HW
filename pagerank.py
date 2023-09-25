@@ -1,38 +1,64 @@
 from google.cloud import storage
 import pandas as pd
 import re
+from tqdm import tqdm
+import os
+import concurrent.futures
 
 
 def calc_pagerank(n:int, out_matrix:list[dict[int,int]], in_matrix:list[dict[int,int]]):
     print("Starting PageRank algorithm...")
-    PR_list = [0.15 for _ in range(n)]
+    PR_list = [(i, 0.0) for i in range(n)]
     prevPRSum = 0.0
-    currPRSum = sum(PR_list)
+    currPRSum = 0.0
+    iters = 0
 
     # Precompute C: List of total outgoing links for each page
     C = [0 for _ in range(n)]
     for i in range(len(out_matrix)):
         C[i] = sum(out_matrix[i].values())
 
-    while( abs(prevPRSum - currPRSum) / currPRSum > 0.005 ):
-        new_PRs = [0.0 for _ in range(n)]
+    while True:
+        new_PRs = [(i, 0.0) for i in range(n)]
 
         for target in range(len(PR_list)):
             # Use PageRank algorithm to calculate new PR value
             PR = 0.15
 
             for source in in_matrix[target].keys():
-                PR += 0.85 * (PR_list[source] / C[source])
+                PR += 0.85 * (PR_list[source][1] / C[source])
             
-            new_PRs[target] = PR
+            new_PRs[target] = (target, PR)
 
         prevPRSum = currPRSum
-        currPRSum = sum(new_PRs)
+        currPRSum = sum([x for _,x in new_PRs])
         PR_list = new_PRs
+        iters += 1
 
-    print("Done")
-    print(PR_list)
+        if (abs(prevPRSum - currPRSum) / currPRSum < 0.005):
+            break
+
+    print("Done in " + str(iters) + " iterations")
     return PR_list
+
+def adj_matrix_worker(blob):
+    #source = int(blob.name.split('.')[0])
+    #source = int(blob.name.split('/')[1].split('.')[0])
+    source = int(blob.split('.')[0])
+    blobPath = "./files/" + blob
+
+    out_edges = []
+
+    with open(blobPath, 'r') as f:
+        contents = f.read()
+
+    outlinks = re.findall(r"\d+.html", contents)
+    out = list(map(lambda s: int(s.split('.')[0]), outlinks))
+
+    for i in out:
+        out_edges.append((source, i))
+
+    return out_edges
 
 def parse_blobs_into_adj_matrix(blobs):
     """
@@ -42,51 +68,57 @@ def parse_blobs_into_adj_matrix(blobs):
     in_matrix is a list of dicts, where
     in_matrix[i] accesses a dictionary containing the incoming links and counts of pages that link to page i
     """
-    print("Starting parsing blobs into adj matrix...")
+    print("Starting parsing blobs...")
+    out_edges = []
     out_matrix = [{} for _ in range(len(blobs))]
     in_matrix = [{} for _ in range(len(blobs))]
 
-    for blob in blobs:
-        source = int(blob.name.split('.')[0])
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        for blob in tqdm(blobs):
+            future = executor.submit(adj_matrix_worker, blob)
+            out_edges.extend(future.result())
 
-        with blob.open("r") as f:
-            contents = f.read()
-            outlinks = re.findall(r"\d+.html", contents)
-            outDict = {}
-            out = list(map(lambda s: int(s.split('.')[0]), outlinks))
+    print("Done")
+    print("Converting to adj matrix...")
+    
+    for (source, target) in tqdm(out_edges):
+        if target in out_matrix[source]:
+            out_matrix[source][target] += 1
+        else:
+            out_matrix[source][target] = 1
 
-            for i in out:
-                if i in outDict:
-                    outDict[i] += 1
-                else:
-                    outDict[i] = 1
-
-                if source in in_matrix[i]:
-                    in_matrix[i][source] += 1
-                else:
-                    in_matrix[i][source] = 1
-
-            out_matrix[source] = outDict
+        if source in in_matrix[target]:
+            in_matrix[target][source] += 1
+        else:
+            in_matrix[target][source] = 1
 
     print("Done")
     return out_matrix, in_matrix
 
 def main():
-    storage_client = storage.Client(project="ds561cloudcomputing")
+    storage_client = storage.Client().create_anonymous_client()
     bucket_name = "bu-ds561-eawang-hw2-sample"
-    blobs = list(storage_client.list_blobs(bucket_name))
+    #bucket_name = "bu-ds561-eawang-hw2-pagerank"
+
+    # print("Fetching blobs from bucket...")
+    # bucket = storage_client.bucket(bucket_name)
+    # blobs = bucket.list_blobs()
+    # print("Done")
+
+    blobs = os.listdir("./files")
 
     # Parse input files and precompute adjacency matrices
     out_matrix, in_matrix = parse_blobs_into_adj_matrix(blobs)
 
-    # TODO: Calc and print stats
+    # TODO: Calc stats
 
 
     # TODO: Calc PageRank
     pagerank = calc_pagerank(len(blobs), out_matrix, in_matrix)
 
     # TODO: Print results
-
+    pagerank.sort(key=lambda x: x[1],reverse=True)
+    print(pagerank[:5])
 
     return
 
