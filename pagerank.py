@@ -4,6 +4,7 @@ import re
 from tqdm import tqdm
 import os
 import concurrent.futures
+import time
 
 
 def calc_pagerank(n:int, out_matrix:list[dict[int,int]], in_matrix:list[dict[int,int]]):
@@ -38,18 +39,19 @@ def calc_pagerank(n:int, out_matrix:list[dict[int,int]], in_matrix:list[dict[int
         if (abs(prevPRSum - currPRSum) / currPRSum < 0.005):
             break
 
+    for i in range(len(PR_list)):
+        PR_list[i] = (i, (PR_list[i][1] / currPRSum))
+
     print("Done in " + str(iters) + " iterations")
     return PR_list
 
 def adj_matrix_worker(blob):
     #source = int(blob.name.split('.')[0])
-    #source = int(blob.name.split('/')[1].split('.')[0])
-    source = int(blob.split('.')[0])
-    blobPath = "./files/" + blob
+    source = int(blob.name.split('/')[1].split('.')[0])
 
     out_edges = []
 
-    with open(blobPath, 'r') as f:
+    with blob.open('r') as f:
         contents = f.read()
 
     outlinks = re.findall(r"\d+.html", contents)
@@ -73,15 +75,19 @@ def parse_blobs_into_adj_matrix(blobs):
     out_matrix = [{} for _ in range(len(blobs))]
     in_matrix = [{} for _ in range(len(blobs))]
 
+    # with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+    #     for blob in tqdm(blobs):
+    #         future = executor.submit(adj_matrix_worker, blob)
+    #         out_edges.extend(future.result())
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-        for blob in tqdm(blobs):
-            future = executor.submit(adj_matrix_worker, blob)
-            out_edges.extend(future.result())
+        for e in tqdm(executor.map(adj_matrix_worker, blobs), total=10000):
+            out_edges.extend(e)
 
     print("Done")
     print("Converting to adj matrix...")
     
-    for (source, target) in tqdm(out_edges):
+    for (source, target) in out_edges:
         if target in out_matrix[source]:
             out_matrix[source][target] += 1
         else:
@@ -96,16 +102,16 @@ def parse_blobs_into_adj_matrix(blobs):
     return out_matrix, in_matrix
 
 def main():
-    storage_client = storage.Client().create_anonymous_client()
-    bucket_name = "bu-ds561-eawang-hw2-sample"
-    #bucket_name = "bu-ds561-eawang-hw2-pagerank"
+    storage_client = storage.Client()
+    #bucket_name = "bu-ds561-eawang-hw2-sample"
+    bucket_name = "bu-ds561-eawang-hw2-pagerank"
 
-    # print("Fetching blobs from bucket...")
-    # bucket = storage_client.bucket(bucket_name)
-    # blobs = bucket.list_blobs()
-    # print("Done")
+    print("Fetching blobs from bucket...")
+    bucket = storage_client.bucket(bucket_name)
+    blobs = list(bucket.list_blobs())
+    print("Done")
 
-    blobs = os.listdir("./files")
+    #blobs = os.listdir("./files")
 
     # Parse input files and precompute adjacency matrices
     out_matrix, in_matrix = parse_blobs_into_adj_matrix(blobs)
@@ -114,11 +120,15 @@ def main():
 
 
     # TODO: Calc PageRank
+    start = time.perf_counter()
     pagerank = calc_pagerank(len(blobs), out_matrix, in_matrix)
+    end = time.perf_counter()
 
     # TODO: Print results
     pagerank.sort(key=lambda x: x[1],reverse=True)
     print(pagerank[:5])
+
+    print("PageRank timer: ", str(end - start))
 
     return
 
