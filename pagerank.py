@@ -1,11 +1,47 @@
 from google.cloud import storage
-import pandas as pd
+import numpy as np
 import re
 from tqdm import tqdm
 import os
 import concurrent.futures
 import time
 
+
+def calc_statistics(out_matrix, in_matrix):
+    print("Starting in/out degrees statistics...")
+    out_stats, in_stats, out_degrees, in_degrees = [], [], [], []
+
+    for x in range(len(out_matrix)):
+        out_degrees.append(sum(out_matrix[x].values()))
+
+    for x in range(len(in_matrix)):
+        in_degrees.append(sum(in_matrix[x].values()))
+
+    out_degrees = np.array(out_degrees)
+    in_degrees = np.array(in_degrees)
+
+    # Average
+    out_stats.append(np.mean(out_degrees))
+    in_stats.append(np.mean(in_degrees))
+
+    # Median
+    out_stats.append(np.median(out_degrees))
+    in_stats.append(np.median(in_degrees))
+
+    # Max
+    out_stats.append(np.max(out_degrees))
+    in_stats.append(np.max(in_degrees))
+
+    # Min
+    out_stats.append(np.min(out_degrees))
+    in_stats.append(np.min(in_degrees))
+
+    # Quintiles
+    out_stats.append(np.quantile(out_degrees, q=[0.2, 0.4, 0.6, 0.8, 1.0]))
+    in_stats.append(np.quantile(in_degrees, q=[0.2, 0.4, 0.6, 0.8, 1.0]))
+
+    print("Done")
+    return out_stats, in_stats
 
 def calc_pagerank(n:int, out_matrix:list[dict[int,int]], in_matrix:list[dict[int,int]]):
     print("Starting PageRank algorithm...")
@@ -15,9 +51,10 @@ def calc_pagerank(n:int, out_matrix:list[dict[int,int]], in_matrix:list[dict[int
     iters = 0
 
     # Precompute C: List of total outgoing links for each page
-    C = [0 for _ in range(n)]
+    out_sums = [0 for _ in range(n)]
     for i in range(len(out_matrix)):
-        C[i] = sum(out_matrix[i].values())
+        out_sums[i] = sum(out_matrix[i].values())
+    C = np.array(out_sums)
 
     while True:
         new_PRs = [(i, 0.0) for i in range(n)]
@@ -80,7 +117,7 @@ def parse_blobs_into_adj_matrix(blobs):
     #         future = executor.submit(adj_matrix_worker, blob)
     #         out_edges.extend(future.result())
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()*5) as executor:
         for e in tqdm(executor.map(adj_matrix_worker, blobs), total=10000):
             out_edges.extend(e)
 
@@ -98,8 +135,35 @@ def parse_blobs_into_adj_matrix(blobs):
         else:
             in_matrix[target][source] = 1
 
+    out_m = np.array(out_matrix)
+    in_m = np.array(in_matrix)
+
     print("Done")
-    return out_matrix, in_matrix
+    return out_m, in_m
+
+def print_stats(out_stats, in_stats):
+    stats = ["Mean: ", "Median: ", "Max: ", "Min: ", "Quintiles: "]
+
+    print("OUTGOING LINKS STATS:")
+    for i in range(len(out_stats)):
+        print('\t' + stats[i] + str(out_stats[i]))
+
+    print()
+
+    print("INCOMING LINKS STATS:")
+    for i in range(len(in_stats)):
+        print('\t' + stats[i] + str(in_stats[i]))
+
+    return
+
+def print_pagerank(pagerank):
+    pagerank.sort(key=lambda x: x[1],reverse=True)
+
+    print("Top 5 PageRanks:")
+    for i in range(5):
+        print("\tRank " + str(i+1) + ": Page " + str(pagerank[i][0]) + " - " + str(pagerank[i][1]) )
+
+    return
 
 def main():
     storage_client = storage.Client()
@@ -111,13 +175,11 @@ def main():
     blobs = list(bucket.list_blobs())
     print("Done")
 
-    #blobs = os.listdir("./files")
-
     # Parse input files and precompute adjacency matrices
     out_matrix, in_matrix = parse_blobs_into_adj_matrix(blobs)
 
     # TODO: Calc stats
-
+    out_stats, in_stats = calc_statistics(out_matrix, in_matrix)
 
     # TODO: Calc PageRank
     start = time.perf_counter()
@@ -125,8 +187,10 @@ def main():
     end = time.perf_counter()
 
     # TODO: Print results
-    pagerank.sort(key=lambda x: x[1],reverse=True)
-    print(pagerank[:5])
+    print()
+    print_stats(out_stats, in_stats)
+    print()
+    print_pagerank(pagerank)
 
     print("PageRank timer: ", str(end - start))
 
