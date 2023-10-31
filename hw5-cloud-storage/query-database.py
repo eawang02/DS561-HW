@@ -140,7 +140,7 @@ def databaseStatistics():
 
 
 # Reset/Clear databases
-# resetDatabase()
+resetDatabase()
 
 # Fetch all entries in both databases
 # fetchAllDatabase()
@@ -149,7 +149,7 @@ def databaseStatistics():
 # describeDatabase()
 
 # Perform statistics queries
-databaseStatistics()
+# databaseStatistics()
 
 connector.close()
 
