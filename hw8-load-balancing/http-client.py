@@ -162,7 +162,9 @@ def make_request(domain, port, country, ip, filename, use_ssl, ssl_context, foll
             filename = urljoin(filename, location_header)
             make_request(domain, port, country, ip, filename, use_ssl, ssl_context, follow, verbose)
     conn.close()
-                 
+
+    # Used to count how many requests are handled by each server
+    return 1 if res.headers.get("X-server-zone") == "us-east4-a" else 0             
         
 def main():
     ssl_context = fix_certs()
@@ -188,6 +190,8 @@ def main():
     if args.bucket == 'none':
         args.bucket =''
     # Make the requests
+
+    server_a_count = 0
     for i in range(0,args.num_requests):
         country = select_country(args.forbidden)
         cidr = select_cidr(country)
@@ -196,7 +200,17 @@ def main():
         # If using the default port but have enabled ssl change the default port to be that of SSL
         if args.ssl and args.port==80:
             args.port=443
-        make_request(args.domain, args.port, country, ip, filename, args.ssl, ssl_context, args.follow, args.verbose)
+
+        try:
+            server_a_count += make_request(args.domain, args.port, country, ip, filename, args.ssl, ssl_context, args.follow, args.verbose)
+        except Exception as e:
+            print("Request failed:")
+            print(e)
+
+    print()
+    print(f"Requests handled by hw8-lb-server-a (us-east4-a): {server_a_count}/{args.num_requests}")
+    print(f"Requests handled by hw8-lb-server-b (us-east4-b): {args.num_requests - server_a_count}/{args.num_requests}")
+
 
 if __name__ == "__main__":
     main()
