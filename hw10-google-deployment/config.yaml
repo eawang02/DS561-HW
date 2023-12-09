@@ -1,0 +1,243 @@
+
+### Define resources
+resources:
+# Service Account
+- name: service-account
+  type: iam.v1.serviceAccount
+  properties:
+    accountId: hw10-service-account
+    displayName: hw10-service-account
+
+# Cloud Bucket
+- name: bu-ds561-eawang-hw10-pagerank
+  type: storage.v1.bucket
+  properties:
+    name: bu-ds561-eawang-hw10-pagerank
+    location: us-central1
+    project: ds561cloudcomputing
+    storageClass: STANDARD
+
+- name: cloud-bucket-iam
+  type: gcp-types/storage-v1:virtual.buckets.iamMemberBinding
+  properties:
+    bucket: $(ref.bu-ds561-eawang-hw10-pagerank.name)
+    member: serviceAccount:$(ref.service-account.email)
+    role: roles/storage.admin
+
+- name: cloud-code-storage-iam
+  type: gcp-types/storage-v1:virtual.buckets.iamMemberBinding
+  properties:
+    bucket: bu-ds561-eawang-hw10-code-storage
+    member: serviceAccount:$(ref.service-account.email)
+    role: roles/storage.admin
+
+- name: pagerank-bucket-iam
+  type: gcp-types/storage-v1:virtual.buckets.iamMemberBinding
+  properties:
+    bucket: $(ref.bu-ds561-eawang-hw10-pagerank.name)
+    member: allUsers
+    role: roles/storage.objectViewer
+
+# Cloud SQL Instance + Database
+- name: hw10-sql-instance
+  type: sqladmin.v1beta4.instance
+  properties:
+    name: hw10-sql-instance
+    region: us-central1
+    databaseVersion: MYSQL_5_7
+    settings:
+      tier: db-custom-4-16384
+      backupConfiguration:
+        enabled: true
+      ipConfiguration:
+        ipv4Enabled: true
+      userLabels:
+        environment: production
+    instanceType: CLOUD_SQL_INSTANCE
+    project: ds561cloudcomputing
+    rootPassword: ds561-eawang-mysql
+
+- name: cloud-sql-database
+  type: sqladmin.v1beta4.database
+  properties:
+    name: hw10-sql-database
+    instance: $(ref.hw10-sql-instance.name)
+    project: ds561cloudcomputing
+
+- name: cloud-sql-iam
+  type: gcp-types/cloudresourcemanager-v1:virtual.projects.iamMemberBinding
+  properties:
+    resource: ds561cloudcomputing
+    role: roles/cloudsql.client
+    member: serviceAccount:$(ref.service-account.email)
+
+# Pub/Sub Topic + Subscription
+- name: hw10-forbidden-requests
+  type: pubsub.v1.topic
+  properties:
+    topic: hw10-forbidden-requests
+  accessControl:
+    gcpIamPolicy:
+      bindings:
+      - role: roles/pubsub.admin
+        members:
+        - serviceAccount:$(ref.service-account.email)
+
+- name: pub-sub-subscription
+  type: pubsub.v1.subscription
+  properties:
+    topic: $(ref.hw10-forbidden-requests.name)
+    subscription: pub-sub-subscription
+    ackDeadlineSeconds: 10
+  accessControl:
+    gcpIamPolicy:
+      bindings:
+      - role: roles/pubsub.admin
+        members:
+        - serviceAccount:$(ref.service-account.email)
+
+# Firewall Rule
+- name: hw10-firewall
+  type: compute.v1.firewall
+  properties:
+    network: global/networks/default
+    targetTags:
+      - allow-5000
+    allowed:
+    - IPProtocol: TCP
+      ports:
+      - 5000
+
+# Static IP
+- name: hw10-server-ip
+  type: compute.v1.address
+  properties:
+    region: us-central1
+
+
+# Web Server VM
+- name: hw10-http-server
+  type: compute.v1.instance
+  properties:
+    zone: us-central1-a
+    machineType: zones/us-central1-a/machineTypes/e2-small
+    disks:
+    - deviceName: boot
+      type: PERSISTENT
+      boot: true
+      autoDelete: true
+      initializeParams:
+        sourceImage: projects/debian-cloud/global/images/family/debian-11
+    networkInterfaces:
+    - network: global/networks/default
+      accessConfigs:
+      - name: External NAT
+        type: ONE_TO_ONE_NAT
+        natIP: $(ref.hw10-server-ip.address)
+    tags:
+      items:
+      - allow-5000
+    serviceAccounts:
+    - email: $(ref.service-account.email)
+      scopes:
+      - https://www.googleapis.com/auth/pubsub
+      - https://www.googleapis.com/auth/sqlservice.admin
+      - https://www.googleapis.com/auth/cloud-platform
+    metadata:
+      dependsOn:
+      - bu-ds561-eawang-hw10-pagerank
+      - cloud-sql-database
+      items:
+      - key: startup-script
+        value: |
+          #!/bin/bash
+          cd root
+
+          if [ ! -f "server/http-server.py" ];
+          then
+          # Files do not exist in the VM yet
+          echo "Installing required files..."
+
+          gcloud storage cp -r gs://bu-ds561-eawang-hw10-code-storage/server/ /root/
+
+          sudo apt-get install python3-pip --no-install-recommends -y
+          pip install -r server/requirements.txt
+
+          # Create mini-internet files
+          python3 server/generate-content.py -n 1000
+          gsutil -m cp -r *.html gs://bu-ds561-eawang-hw10-pagerank/
+
+          # Start server
+          python3 server/http-server.py
+
+          else
+          # Files already imported, just restart the server
+          python3 server/http-server.py
+          fi
+
+# Bindings for cloud logging + Pub Sub
+- name: cloud-logging-iam
+  type: gcp-types/cloudresourcemanager-v1:virtual.projects.iamMemberBinding
+  properties:
+    resource: ds561cloudcomputing
+    role: roles/logging.logWriter
+    member: serviceAccount:$(ref.service-account.email)
+
+- name: cloud-pubsub-iam
+  type: gcp-types/cloudresourcemanager-v1:virtual.projects.iamMemberBinding
+  properties:
+    resource: ds561cloudcomputing
+    role: roles/pubsub.subscriber
+    member: serviceAccount:$(ref.service-account.email)  
+
+
+# Pub/Sub Listener VM
+- name: hw10-pubsub-server
+  type: compute.v1.instance
+  properties:
+    zone: us-central1-a
+    machineType: zones/us-central1-a/machineTypes/e2-small
+    disks:
+    - deviceName: boot
+      type: PERSISTENT
+      boot: true
+      autoDelete: true
+      initializeParams:
+        sourceImage: projects/debian-cloud/global/images/family/debian-11
+    networkInterfaces:
+    - network: global/networks/default
+      accessConfigs:
+      - name: External NAT
+        type: ONE_TO_ONE_NAT
+    serviceAccounts:
+    - email: $(ref.service-account.email)
+      scopes:
+      - https://www.googleapis.com/auth/pubsub
+      - https://www.googleapis.com/auth/cloud-platform
+    metadata:
+      dependsOn:
+      - hw10-http-server
+      - pub-sub-subscription
+      items:
+      - key: startup-script
+        value: |
+          #!/bin/bash
+          cd root
+
+          if [ ! -f "pubsub/pubsub-app.py" ];
+          then
+          # Files do not exist in the VM yet
+          echo "Installing required files..."
+
+          gcloud storage cp -r gs://bu-ds561-eawang-hw10-code-storage/pubsub/ /root/
+
+          sudo apt-get install python3-pip --no-install-recommends -y
+          pip install -r pubsub/requirements.txt
+
+          # Start pubsub app
+          python3 pubsub/pubsub-app.py
+
+          else
+          # Files already imported, just restart the app
+          python3 pubsub/pubsub-app.py
+          fi
